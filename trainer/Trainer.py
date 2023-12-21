@@ -1,65 +1,89 @@
+import os
+import random
+import time
+from utils import Averager
+from test import validation
+import torch
+import torch.backends.cudnn as cudnn
+from torch.cuda.amp import autocast, GradScaler
+from ValidDatasetProcessor import ValidDatasetProcessor
+from ModelConfiguration import ModelConfiguration
+from LayerControl import LayerControl
+from Optimizer import Optimizer
+from Loss import Loss
+
 class Trainer:
     def __init__(self, opt):
         self.__opt = opt
         self.__model = None
-        self.__num_iter = 0
+        self.__current_iter = 0
         self.__best_accuracy = -1
         self.__best_norm_ED = -1
         self.__scaler = GradScaler()
         self.__converter = None
         self.__preds = None
         self.__labels = None
-        self.loss_avg = None
-        
-    def start_training(self, show_number = 2, amp = False):
+        self.loss_avg = Averager()
+        self.__valid_loader = None
+        self.__optimizer = None
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    def _init_training_components(self):
+        # load valid loader
         valid_dataset_processor = ValidDatasetProcessor(self.__opt)
-        valid_loader = valid_dataset_processor.create_valid_dataset()
+        self.__valid_loader = valid_dataset_processor.create_valid_loader()
+        self.__opt = valid_dataset_processor.get_opt()
+
+        # load model
         model_config = ModelConfiguration(self.__opt)
         self.__model = model_config.load_model()
         self.__converter = model_config.get_converter()
-        loss = Loss(self.__opt)
-        criterion = loss.set_criterion()
-        self.loss_avg = loss.get_loss()
+        self.__opt = model_config.get_opt()
+        
+        #freeze some layer
         layer_control = LayerControl(self.__opt)
-        layer_control.freeze_layer(self.__model)
+        self.__model = layer_control.freeze_layer(self.__model)
+        
+        # load optimizer
+        optimizer_obj = Optimizer(self.__opt, self.__model)
+        self.__optimizer = optimizer_obj.get_optimizer()
+        
+    def start_training(self, show_number = 2, amp = False):
+        self._init_training_components()
+        loss_obj = Loss(self.__opt)
+        criterion = loss_obj.set_criterion()
+        
         start_time = time.time()
         t1 = time.time()
         validation_log = ValidationLog(self.__opt)
-        while(True):
-            
+        while(True):           
             # train part
-            # load optimizer
-            optimizer_obj = Optimizer(self.__opt, self.__model)
-            optimizer = optimizer_obj.get_optimizer()
-            optimizer.zero_grad(set_to_none = True)
+            # self.__optimizer.zero_grad(set_to_none = True)
             
-            if amp:
-                with autocast():
-                    cost = self.__predict(criterion)
-                self.__mix_precision_training(cost, optimizer)
-            else:
-                cost = self.__predict(criterion)
-                self.__single_precision_training(cost, optimizer)
-            self.loss_avg.add(cost)
+            # if amp:
+            #     with autocast():
+            #         cost = self.__predict(criterion)
+            #     self.__mix_precision_training(cost, optimizer)
+            # else:
+            #     cost = self.__predict(criterion)
+            #     self.__single_precision_training(cost, optimizer)
+            # self.loss_avg.add(cost)
             
-            i = self.__num_iter
-            validationer = Validationer(self.__opt, self.__model)    
-
-            if (i % self.opt.valInterval == 0) and (i!=0):
+            if (self.__current_iter % self.__opt.valInterval == 0) and (self.__current_iter!=0):
                 print('training time: ', time.time() - t1)
                 t1=time.time()
                 elapsed_time = time.time() - start_time  
                             
-                model.eval()
+                self.__model.eval()
                 
                 with torch.no_grad():
                     valid_loss, current_accuracy, current_norm_ED, self.__preds, confidence_score, self.__labels,\
-                    infer_time, length_of_data = validation(self.__model, criterion, valid_loader, self.__converter, self.__opt, device)
+                    infer_time, length_of_data = validation(self.__model, criterion, self.__valid_loader, self.__converter, self.__opt, self.device)
                 
-                model.train()
+                self.__model.train()
                 
                 # training loss and validation loss
-                loss_log = f'[{i}/{self.__opt.num_iter}] Train loss: {self.loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
+                loss_log = f'[{self.__current_iter}/{self.__opt.num_iter}] Train loss: {self.loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
                 self.loss_avg.reset()
                 
                 current_model_log = f'{"Current_accuracy":17s}: {current_accuracy:0.3f}, {"Current_norm_ED":17s}: {current_norm_ED:0.4f}'
@@ -90,15 +114,29 @@ class Trainer:
                 validation_log.write_log(loss_model_log, predicted_result_log)
                 
             # save model per 1e+4 iter.
-            if (i + 1) % 1e+4 == 0:
+            if (self.__current_iter + 1) % 1e+4 == 0:
                 torch.save(
-                    model.state_dict(), f'./saved_models/{opt.experiment_name}/iter_{i+1}.pth')
+                    self.__model.state_dict(), f'./saved_models/{self.__opt.experiment_name}/iter_{self.__current_iter + 1}.pth')
 
-            if i == opt.num_iter:
+            if self.__current_iter == self.__opt.num_iter:
                 print('end the training')
                 sys.exit()
-            self.__num_iter += 1
+            self.__current_iter += 1
             
+    def _train_one_iteration(self, amp, criterion, show_number, start_time):
+        # train part
+        self.__optimizer.zero_grad(set_to_none = True)
+        
+        if amp:
+            with autocast():
+                cost = self.__predict(criterion)
+            self.__mix_precision_training(cost, optimizer)
+        else:
+            cost = self.__predict(criterion)
+            self.__single_precision_training(cost, optimizer)
+        self.loss_avg.add(cost)
+        
+        
             
     def __CTC_in_Prediction(self, image, text, length, criterion):
         self.__preds = model(image, text).log_softmax(2)
@@ -107,16 +145,19 @@ class Trainer:
         torch.backends.cudnn.enabled = False
         cost = criterion(self.__preds, text.to(device), preds_size.to(device), length.to(device))
         torch.backends.cudnn.enabled = True
-        
+        return cost
+    
     def __CTC_no_in_Prediction(self, image, text, criterion):
         self.__preds = model(image, text[:, :-1])  # align with Attention.forward
         target = text[:, 1:]  # without [GO] Symbol
         cost = criterion(self.__preds.view(-1, self.__preds.shape[-1]), target.contiguous().view(-1))
+        return cost
     
     def __predict(self, criterion):
         # load train dataset
         train_data_obj = TrainDatasetProcessor(self.__opt)
-        train_dataset = train_data_obj.load_train_dataset()
+        train_dataset = train_data_obj.load_dataset()
+        self.__opt = train_data_obj.get_opt()
         
         image_tensor, self.__labels = train_dataset.get_batch()
         image = image_tensors.to(device)
@@ -125,9 +166,9 @@ class Trainer:
         batch_size = image.size(0)
         
         if 'CTC' in self.__opt.Prediction:
-            self.__CTC_in_Prediction(image, text, length, criterion)
+            cost = self.__CTC_in_Prediction(image, text, length, criterion)
         else:
-            self.__CTC_no_in_Prediction(image, text, criterion)
+            cost = self.__CTC_no_in_Prediction(image, text, criterion)
         return cost
     
     def __mix_precision_training(self, cost, optimizer):
@@ -156,6 +197,3 @@ class Trainer:
     def update_best_norm_ED(self, current_norm_ED):
         self.__best_norm_ED = current_norm_ED
         torch.save(self.__model.state_dict(), f'./saved_models/{self.__opt.experiment_name}/best_norm_ED.pth')
-
-        
-    
