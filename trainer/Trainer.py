@@ -54,7 +54,7 @@ class Trainer:
         criterion = loss_obj.set_criterion()
         
         start_time = time.time()
-        t1 = time.time()
+        # t1 = time.time()
         validation_log = ValidationLog(self.__opt)
         while(True):           
             # train part
@@ -68,6 +68,7 @@ class Trainer:
             #     cost = self.__predict(criterion)
             #     self.__single_precision_training(cost, optimizer)
             # self.loss_avg.add(cost)
+            self._train_one_iteration(amp, criterion, show_number, start_time)
             
             if (self.__current_iter % self.__opt.valInterval == 0) and (self.__current_iter!=0):
                 print('training time: ', time.time() - t1)
@@ -124,6 +125,7 @@ class Trainer:
             self.__current_iter += 1
             
     def _train_one_iteration(self, amp, criterion, show_number, start_time):
+        t1 = time.time()
         # train part
         self.__optimizer.zero_grad(set_to_none = True)
         
@@ -136,6 +138,62 @@ class Trainer:
             self.__single_precision_training(cost, optimizer)
         self.loss_avg.add(cost)
         
+        if (self.__current_iter % self.__opt.valInterval == 0) and (self.__current_iter!=0):
+            self._validate_and_log(t1, criterion, start_time, show_number)
+        
+        # save model per 1e+4 iter.
+        if (self.__current_iter + 1) % 1e+4 == 0:
+            torch.save(
+                self.__model.state_dict(), f'./saved_models/{self.__opt.experiment_name}/iter_{self.__current_iter + 1}.pth')
+
+        if self.__current_iter == self.__opt.num_iter:
+            print('end the training')
+            sys.exit()
+        self.__current_iter += 1
+        
+    def _validate_and_log(self, t1, criterion, start_time, show_number):
+        print('training time: ', time.time()-t1)
+        t1=time.time()
+        elapsed_time = time.time() - start_time
+        
+        self.__model.eval()
+        
+        with torch.no_grad():
+            valid_loss, current_accuracy, current_norm_ED, self.__preds, confidence_score, self.__labels,\
+            infer_time, length_of_data = validation(self.__model, criterion, self.__valid_loader, self.__converter, self.__opt, self.device)
+        
+        self.__model.train()
+        
+        # training loss and validation loss
+        loss_log = f'[{self.__current_iter}/{self.__opt.num_iter}] Train loss: {self.loss_avg.val():0.5f}, Valid loss: {valid_loss:0.5f}, Elapsed_time: {elapsed_time:0.5f}'
+        self.loss_avg.reset()
+        
+        current_model_log = f'{"Current_accuracy":17s}: {current_accuracy:0.3f}, {"Current_norm_ED":17s}: {current_norm_ED:0.4f}'
+        
+        self.keep_best_accuracy_model(current_accuracy, current_norm_ED)
+        best_model_log = f'{"Best_accuracy":17s}: {self.__best_accuracy:0.3f}, {"Best_norm_ED":17s}: {self.__best_norm_ED:0.4f}'
+        loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
+        print(loss_model_log)
+        
+        # show some predicted results
+        dashed_line = '-' * 80
+        head = f'{"Ground Truth":25s} | {"Prediction":25s} | Confidence Score & T/F'
+        predicted_result_log = f'{dashed_line}\n{head}\n{dashed_line}\n'
+        
+        start = random.randint(0,len(self.__labels) - show_number )    
+        for gt, pred, confidence in zip(self.__labels[start:start+show_number], self.__preds[start:start+show_number], confidence_score[start:start+show_number]):
+            if 'Attn' in self.__opt.Prediction:
+                gt = gt[:gt.find('[s]')]
+                pred = pred[:pred.find('[s]')]
+
+            predicted_result_log += f'{gt:25s} | {pred:25s} | {confidence:0.4f}\t{str(pred == gt)}\n'
+        predicted_result_log += f'{dashed_line}'
+        print(predicted_result_log)
+        log.write(predicted_result_log + '\n')
+        print('validation time: ', time.time()-t1)
+        t1=time.time()
+        
+        validation_log.write_log(loss_model_log, predicted_result_log)
         
             
     def __CTC_in_Prediction(self, image, text, length, criterion):
@@ -143,7 +201,7 @@ class Trainer:
         preds_size = torch.IntTensor([self.__preds.size(1)] * batch_size)
         self.__preds = self.__preds.permute(1, 0, 2)
         torch.backends.cudnn.enabled = False
-        cost = criterion(self.__preds, text.to(device), preds_size.to(device), length.to(device))
+        cost = criterion(self.__preds, text.to(self.device), preds_size.to(self.device), length.to(self.device))
         torch.backends.cudnn.enabled = True
         return cost
     
@@ -160,7 +218,7 @@ class Trainer:
         self.__opt = train_data_obj.get_opt()
         
         image_tensor, self.__labels = train_dataset.get_batch()
-        image = image_tensors.to(device)
+        image = image_tensors.to(self.device)
         
         text, length = self.__converter.encode(self.__labels, batch_max_length=self.__opt.batch_max_length)
         batch_size = image.size(0)
