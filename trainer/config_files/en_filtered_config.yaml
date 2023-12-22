@@ -21,7 +21,7 @@ grad_clip: 5
 select_data: 'en_train_filtered' # this is dataset folder in train_data
 batch_ratio: '1' 
 total_data_usage_ratio: 1.0
-batch_max_length: 34 
+batch_max_length: 100
 imgH: 64
 imgW: 600
 rgb: False
