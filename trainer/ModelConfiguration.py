@@ -10,18 +10,18 @@ class ModelConfiguration:
     def __init__(self, opt):
         self.__opt = opt
         self.__model = None
-        self.__converter = None
         self.__device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-    def __choose_converter(self):
+    def set_converter(self):
         if 'CTC' in self.__opt.Prediction:
-            self.__converter = CTCLabelConverter(self.__opt.character)
+            converter = CTCLabelConverter(self.__opt.character)
         else:
-            self.__converter = AttnLabelConverter(self.__opt.character)
+            converter = AttnLabelConverter(self.__opt.character)
         
-        self.__opt.num_class = len(self.__converter.character)
+        self.__opt.num_class = len(converter.character)
         
         self.__input_channel_config()
+        return converter
     
     def __input_channel_config(self):
         if self.__opt.rgb:
@@ -29,9 +29,6 @@ class ModelConfiguration:
             
     def get_opt(self):
         return self.__opt
-    
-    def get_converter(self):
-        return self.__converter
     
     def set_model_prediction(self):
         if self.__opt.new_prediction:
@@ -78,7 +75,6 @@ class ModelConfiguration:
             self.__model = torch.nn.DataParallel(self.__model).to(self.__device)
             
     def load_model(self):
-        self.__choose_converter()
         self.__model = Model(self.__opt)
         print('model input parameters', self.__opt.imgH, self.__opt.imgW, self.__opt.num_fiducial, self.__opt.input_channel, self.__opt.output_channel,
             self.__opt.hidden_size, self.__opt.num_class, self.__opt.batch_max_length, self.__opt.Transformation, self.__opt.FeatureExtraction,
