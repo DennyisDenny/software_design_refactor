@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from model import Model
 from utils import CTCLabelConverter, AttnLabelConverter
+from Parameter import Parameter
 
 class ModelConfiguration:
     def __init__(self, opt):
