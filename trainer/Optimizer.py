@@ -12,15 +12,15 @@ class Optimizer:
         self.__model = model
         self.__opt = opt
 
-    def filter_parameter(self):
+    def __filter_parameter(self):
         for p in filter(lambda p: p.requires_grad, self.__model.parameters()):
             self.__filtered_parameters.append(p)
             self.__params_num.append(np.prod(p.size()))
         print('Trainable params num : ', sum(self.__params_num))
         
-    def set_optimizer(self):
+    def __set_optimizer(self):
         
-        self.filter_parameter()
+        self.__filter_parameter()
         
         if self.__opt.optim == 'adam':
             self.__optimizer = optim.Adam(self.__filtered_parameters)
@@ -31,6 +31,6 @@ class Optimizer:
         
     def get_optimizer(self):
         
-        self.set_optimizer()
+        self.__set_optimizer()
         
         return self.__optimizer
