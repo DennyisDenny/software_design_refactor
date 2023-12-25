@@ -9,7 +9,6 @@ import torch.backends.cudnn as cudnn
 from torch.cuda.amp import autocast, GradScaler
 from DatasetProcessor import ValidDatasetProcessor, TrainDatasetProcessor
 from ModelConfiguration import ModelConfiguration
-from LayerControl import LayerControl
 from Optimizer import Optimizer
 from Loss import Loss
 from Logger import ValidationLogger
@@ -49,9 +48,6 @@ class Trainer:
         self.__model = model_config.load_model()
         self.__opt = model_config.get_opt()
         
-        #freeze some layer
-        layer_control = LayerControl(self.__opt)
-        self.__model = layer_control.freeze_layer(self.__model)
         
         # load optimizer
         optimizer_obj = Optimizer(self.__opt, self.__model)
@@ -119,13 +115,11 @@ class Trainer:
         print('training time: ', time.time()-t1)
         t1=time.time()
         elapsed_time = time.time() - start_time
-        
         self.__model.eval()
         
         with torch.no_grad():
             valid_loss, current_accuracy, current_norm_ED, self.__preds, confidence_score, self.__labels,\
             infer_time, length_of_data = validation(self.__model, criterion, self.__valid_loader, self.__converter, self.__opt, self.device)
-        
         self.__model.train()
         
         # training loss and validation loss
