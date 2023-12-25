@@ -5,6 +5,7 @@ import torch.nn.init as init
 from model import Model
 from utils import CTCLabelConverter, AttnLabelConverter
 from Parameter import Parameter
+from LayerControl import LayerControl
 
 class ModelConfiguration:
     def __init__(self, opt):
@@ -83,6 +84,10 @@ class ModelConfiguration:
         self.__load_pre_trained_model()
         
         self.train()
+        
+        #freeze some layer
+        layer_control = LayerControl(self.__opt)
+        self.__model = layer_control.freeze_layer(self.__model)
         
         return self.__model
         
