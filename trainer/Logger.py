@@ -24,10 +24,6 @@ class ValidationLogger(Logger):
         print("Experiment Name:", self._experiment_name)
         
     def write_log(self, loss_model_log, predicted_result_log):
-        # with open(f'./save_models/{self._experiment_name}/log_train.txt', 'a', encoding='utf8') as log:
-        #     # loss_model_log = f'{loss_log}\n{current_model_log}\n{best_model_log}'
-        #     log.write(loss_model_log + '\n')
-        #     log.write(predicted_result_log + '\n')
         log = open(f'./saved_models/{self._experiment_name}/log_train.txt', 'a', encoding="utf8")
         log.write(loss_model_log + '\n')
         log.write(predicted_result_log + '\n')
